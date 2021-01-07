@@ -10,7 +10,7 @@ if dcmtorch is not None:
 	import dcmtorch
 import cv2
 
-__version__ = '2.0.0'
+__version__ = '2.0.1'
 
 n_bits = 12
 max_value = 2**n_bits - 1
@@ -147,12 +147,26 @@ class DCM:
 			self.dtype = arg.dtype
 			self.data = arg.data
 			self.shape = arg.shape
-			self.rows , self.cols = self.shape
-			self.height, self.width = self.shape
-			self.channel, self.batch = arg.channel, arg.batch
+			self.dim = arg.dim
+			if self.dim == scalar:
+				pass
+			elif self.dim == row_vec:
+				self.width, self.cols = arg.width, arg.cols
+			elif self.dim == col_vec:
+				self.height, self.rows = arg.height, arg.rows
+			elif self.dim == matrix:
+				self.height, self.width = arg.shape
+				self.rows, self.cols = arg.shape
+			elif self.dim == channels_first or self.dim == channels_last:
+				self.channel = arg.channel
+				self.height, self.width = arg.height, arg.width
+				self.rows, self.cols = arg.rows, arg.cols
+			elif self.dim == BCHW or self.dim == BHWC:
+				self.batch, self.channel = arg.batch, arg.channel
+				self.height, self.width = arg.height, arg.width
+				self.rows, self.cols = arg.rows, arg.cols
 			self.kind = arg.kind
 			self.color = arg.color
-			self.dim = matrix
 
 	def __copy__(self):
 		return DCM(self)
@@ -180,7 +194,7 @@ class DCM:
 					ds.PixelData = __change_type__(__clip__((-self).data, self.dtype), self.dtype, uint16).tobytes()
 				ds.Rows, ds.Columns = len(self.data), 0 if self.rows == 0 else self.cols
 				ds.save_as(name)
-			if name[-4:].lower() == '.img':
+			elif name[-4:].lower() == '.img':
 				raise NotImplementedError(name)
 			else:
 				cv2.imwrite(name, __change_type__(__clip__(self.data, self.dtype), self.dtype, uint8))
@@ -279,43 +293,153 @@ class DCM:
 		new = DCM(self)
 		new.data = new.data / other
 		return new
+	
+	def __len__(self):
+		return self.shape[0]
 
 	def __getitem__(self, index):
 		new = DCM(self)
 		new.data = self.data[index]
 		new.shape = new.data.shape
-
-		if self.dim == matrix and isinstance(index, int):
-			new.dim = row_vec
-			new.rows, new.height = 1, 1
-
-		elif (self.dim == row_vec or self.dim == col_vec) and isinstance(index, int):
+		if len(new.shape) == 0:
+			new.batch, new.channel = None, None
+			new.height, new.width = None, None
+			new.rows, new.cols = None, None
 			new.dim = scalar
-			new.rows, new.cols, new.height, new.width = 1,1,1,1
 
-		elif isinstance(index, slice):
-			if self.dim == row_vec:
-				new.cols, new.width = self.shape[0], self.shape[0]
+		elif self.dim == row_vec:
+			new.width, new.cols = new.shape[0], new.shape[0]
+		elif self.dim == col_vec:
+			new.height, new.rows = new.shape[0], new.shape[0]
+				
+		elif self.dim == matrix:
+			if len(new.shape) == 1:
+				if isinstance(index, int) or isinstance(index[0], int):
+					new.height, new.rows = None, None
+					new.width, new.cols = new.shape[0], new.shape[0]
+					new.dim = row_vec
+				else:
+					new.height, new.rows = new.shape[0], new.shape[0]
+					new.width, new.cols = None, None
+					new.dim = col_vec
 			else:
-				new.rows, new.height = self.shape[0], self.shape[0]
+				new.height, new.width = new.shape
+				new.rows, new.cols = new.shape
 
-		elif isinstance(index, tuple):
-			if len(index) == 1 and isinstance(index[0], int):
-				return self[index[0]]
-			elif isinstance(index[0], int) and isinstance(index[1], int):
-				new.dim = scalar
-				new.rows, new.cols, new.width, new.height = 1,1,1,1
-			elif isinstance(index[0], int) and isinstance(index[1], slice):
-				new.dim = row_vec
-				new.rows, new.height = 1
-				new.cols, new.width = self.shape[0], self.shape[0]
-			elif isinstance(index[0], slice) and isinstance(index[1], int):
-				new.dim = col_vec
-				new.rows, new.height = self.shape[0], self.shape[1]
-				new.cols, self.width = 1
-			elif isinstance(index[0], slice) and isinstance(index[1], slice):
-				new.rows, new.cols = self.shape
-				new.width, new.height = self.shape
+		elif self.dim == channels_first:
+			if len(new.shape) == 1:
+				if not isinstance(index[0], int):
+					raise NotImplementedError(index)
+				if isinstance(index[1], int):
+					new.channel = None
+					new.height, new.rows = None, None
+					new.width, new.cols = new.shape[0], new.shape[0]
+					new.dim = row_vec
+				else:
+					new.channel = None
+					new.height, new.rows = new.shape[0], new.shape[0]
+					new.width, new.cols = None, None
+					new.dim = col_vec
+			elif len(new.shape) == 2:
+				if not isinstance(index, int) and not isinstance(index[0], int):
+					raise NotImplementedError(index)
+				new.batch = None
+				new.height, new.width = new.shape
+				new.rows, new.cols = new.shape
+				new.dim = matrix
+			else:
+				new.batch, new.height, new.width = new.shape
+				_, new.rows, new.cols = new.shape
+
+		elif self.dim == channels_last:
+			if len(new.shape) == 1:
+				if len(index) < 3 or not isinstance(index[2], int):
+					raise NotImplementedError(index)
+				if isinstance(index[0], int):
+					new.channel = None
+					new.height, new.rows = None, None
+					new.width, new.cols = new.shape[0], new.shape[0]
+					new.dim = row_vec
+				else:
+					new.channel = None
+					new.height, new.rows = new.shape[0], new.shape[0]
+					new.width, new.cols = None, None
+					new.dim = col_vec
+			elif len(new.shape) == 2:
+				if len(index) < 3 or not isinstance(index[2], int):
+					raise NotImplementedError(index)
+				new.channel = None
+				new.height, new.width = new.shape
+				new.rows, new.cols = new.shape
+				new.dim = matrix
+			else:
+				new.height, new.width, new.batch = new.shape
+				new.height, new.width, _ = new.shape
+
+		elif self.dim == BCHW:
+			if len(new.shape) == 1:
+				if not isinstance(index[0], int) or not isinstance(index[1], int):
+					raise NotImplementedError(index)
+				if isinstance(index[2], int):
+					new.batch, new.channel = None, None
+					new.height, new.rows = None, None
+					new.width, new.cols = new.shape[0], new.shape[0]
+					new.dim = row_vec
+				else:
+					new.batch, new.channel = None, None
+					new.height, new.rows = new.shape[0], new.shape[0]
+					new.width, new.cols = None, None
+					new.dim = col_vec
+			elif len(new.shape) == 2:
+				if not isinstance(index[0], int) or not isinstance(index[1], int):
+					raise NotImplementedError(index)
+				new.batch, new.channel = None, None
+				new.height, new.width = new.shape
+				new.rows, new.cols = new.shape
+				new.dim = matrix
+			elif len(new.shape) == 3:
+				if not isinstance(index, int) and not isinstance(index[0], int):
+					raise NotImplementedError(index)
+				new.batch = None
+				new.channel, new.height, new.width = new.shape
+				_, new.rows, new.cols = new.shape
+				new.dim = channels_first
+			else:
+				new.batch, new.channel, new.height, new.width = new.shape
+				_, _, new.rows, new.cols = new.shape
+		
+		elif self.dim == BHWC:
+			if len(new.shape) == 1:
+				if len(index) < 4 or (not isinstance(index[0], int) or not isinstance(index[3], int)):
+					raise NotImplementedError(index)
+				if isinstance(index[1], int):
+					new.batch, new.channel = None, None
+					new.height, new.rows = None, None
+					new.width, new.cols = new.shape[0], new.shape[0]
+					new.dim = row_vec
+				else:
+					new.batch, new.channel = None, None
+					new.height, new.rows = new.shape[0], new.shape[0]
+					new.width, new.cols = None, None
+					new.dim = col_vec
+			elif len(new.shape) == 2:
+				if len(index) < 4 or (not isinstance(index[0], int) or not isinstance(index[3], int)):
+					raise NotImplementedError(index)
+				new.batch, new.channel = None, None
+				new.height, new.width = new.shape
+				new.rows, new.cols = new.shape
+				new.dim = matrix
+			elif len(new.shape) == 3:
+				if not isinstance(index, int) and not isinstance(index[0], int):
+					raise NotImplementedError(index)
+				new.batch = None
+				new.height, new.width, new_channel = new.shape
+				new.rows, new.cols, _ = new.shape
+				new.dim = channels_last
+			else:
+				new.batch, new.height, new.width, new.channel = new.shape
+				_, new.rows, new.cols, _ = new.shape
+	 
 		return new
 
 	def __setitem__(self, key, item):
@@ -436,8 +560,86 @@ class DCM:
 		new.data = __change_type__(new.data, uint16, self.dtype)
 		return new
 
-def read(directory, dtype=ufloat32):
-	return DCM(directory, dtype)
+	def __set_shape__(self):
+		self.shape = self.data.shape
+		if self.dim == scalar:
+			self.batch, self.channel, self.height, self.width = None, None, None, None
+			self.rows, self.cols = None, None
+		elif self.dim == row_vec:
+			self.batch, self.channel, self.height, self.rows = None, None, None, None
+			self.width, self.cols = self.shape[0], self.shape[0]
+		elif self.dim == col_vec:
+			self.batch, self.channel, self.width, self.rows = None, None, None, None
+			self.height, self.rows = self.shape[0], self.shape[0]
+		elif self.dim == matrix:
+			slef.batch, self. channel = None, None
+			self.height, self.width = self.shape
+			self.rows, self.cols = self. shape
+		elif self.dim == channels_first:
+			self.batch = None
+			self.channel, self.height, self.width = self.shape
+			_, self.rows, self.cols = self.shape
+		elif self.dim == channels_last:
+			self.batch = None
+			self.height, self.width, self.channel = self.shape
+			self.rows, self.cols, _ = self.shape
+		elif self.dim == BCHW:
+			self.batch, self.channel, self.height, self.width = self.shape
+			_, _, self.rows, self.cols = self.shape
+		elif self.dim == BHWC:
+			self.batch, self.height, self.width, self.channle = self.shape
+			_, self.rows, self.cols, _ = self.shape
+
+def concatenate(lst, axis=None):
+	if axis is None:
+		if lst[0].dim == channels_last:
+			axis = -1
+		else:
+			axis = 0
+
+	np_lst = []
+	for img in lst:
+		if img.dim != lst[0].dim:
+			raise NotImplementedError(img.dim)
+		if img.color != lst[0].color:
+			raise NotImplementedError(img.color)
+
+		np_lst.append(img.data)
+
+	new = DCM(lst[0])
+	new.data = np.concatenate(np_lst, axis=axis)	
+	new.__set_shape__()
+	return new
+
+def stack(lst, axis=None):
+	np_lst = []
+	for img in lst:
+		if img.dim != lst[0].dim:
+			raise NotImplementedError(img.dim)
+		if img.color != lst[0].color:
+			raise NotImplementedError(img.color)
+
+		np_lst.append(img.expand_dims(axis=axis).data)
+
+	new = DCM(lst[0].expand_dims(axis=axis))
+	new.data = np.concatenate(np_lst, axis=axis)	
+	new.__set_shape__()
+	return new
+
+		
+
+def read(path, **kwargs):
+	return DCM(path, **kwargs)
+
+def read_files(paths, dim=BCHW, **kwargs):
+	lst = []
+	for path in paths:
+		img = read(path, **kwargs)
+		if dim==channels_last or dim==BHWC:
+			lst.append(img.expand_dims(axis=-1))
+		else:
+			lst.append(img.expand_dims(axis=0))
+	return stack(lst, axis=0)
 
 def read_directory(directory):
 	lst = []
