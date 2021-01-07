@@ -528,7 +528,7 @@ class DCM:
 			if n == 1:
 				return np.expand_dims(self.data, axis=0)
 			else:
-				return np.repeat(self.data_with_channel(framework), n, axis=0)
+				return np.repeat(self.data_with_channel(c), n, axis=0)
 
 	def rotate(self, n=1):
 		new = DCM(self)
